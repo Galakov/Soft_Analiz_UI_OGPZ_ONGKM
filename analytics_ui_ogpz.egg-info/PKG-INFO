@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: analytics_ui_ogpz
+Version: 1.2.2
+Summary: Tool for merging and analyzing Excel files
+Author: User
+Requires-Dist: pandas
+Requires-Dist: openpyxl
+Requires-Dist: xlrd
+Requires-Dist: numpy
+Dynamic: author
+Dynamic: requires-dist
+Dynamic: summary

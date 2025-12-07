@@ -1,0 +1,12 @@
+MANIFEST.in
+excel_merger.py
+setup.py
+analytics_ui/__init__.py
+analytics_ui/excel_merger.py
+analytics_ui/Правила названия столбцов.xlsx
+analytics_ui_ogpz.egg-info/PKG-INFO
+analytics_ui_ogpz.egg-info/SOURCES.txt
+analytics_ui_ogpz.egg-info/dependency_links.txt
+analytics_ui_ogpz.egg-info/entry_points.txt
+analytics_ui_ogpz.egg-info/requires.txt
+analytics_ui_ogpz.egg-info/top_level.txt
