@@ -1,2 +1,3 @@
 [console_scripts]
 analytics-ui = analytics_ui.excel_merger:main
+analytics-ui-setup = analytics_ui.post_install:create_shortcuts
