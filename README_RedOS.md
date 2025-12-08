@@ -85,20 +85,20 @@ python3 excel_merger.py
 
 1.  Сделайте скрипт установки исполняемым:
     ```bash
-    chmod +x install_redos.sh
+    chmod +x scripts/install_redos.sh
     ```
 
 2.  Запустите установку (требуются права администратора):
     ```bash
-    sudo ./install_redos.sh
+    sudo ./scripts/install_redos.sh
     ```
 
 После установки программа появится в меню приложений под названием "Аналитика УИ ОГПЗ".
 
 Для удаления программы используйте скрипт `uninstall_redos.sh`:
 ```bash
-chmod +x uninstall_redos.sh
-sudo ./uninstall_redos.sh
+chmod +x scripts/uninstall_redos.sh
+sudo ./scripts/uninstall_redos.sh
 ```
 
 ## Создание и установка .whl пакета
@@ -109,8 +109,8 @@ sudo ./uninstall_redos.sh
 
 Запустите скрипт сборки:
 ```bash
-chmod +x build_wheel.sh
-./build_wheel.sh
+chmod +x scripts/build_wheel.sh
+./scripts/build_wheel.sh
 ```
 
 В папке `dist/` появится файл вида `analytics_ui_ogpz-1.2.0-py3-none-any.whl`.
@@ -119,9 +119,14 @@ chmod +x build_wheel.sh
 
 1.  Скопируйте `.whl` файл на целевой компьютер в любую удобную папку (например, в домашнюю папку `~/` или `/home/username/`).
 2.  Установите системные зависимости (см. Шаг 1 основной инструкции).
-3.  Откройте терминал в папке с файлом и установите пакет:
+3.  Откройте терминал в папке, куда вы скопировали файл.
+    Проверьте, что файл на месте, командой `ls`:
     ```bash
-    pip3 install analytics_ui_ogpz-1.2.3-py3-none-any.whl
+    ls analytics_ui_ogpz-*.whl
+    ```
+    Если файл отобразился, установите его:
+    ```bash
+    pip3 install analytics_ui_ogpz-1.2.4-py3-none-any.whl
     ```
 
 ### 3. Настройка ярлыков
@@ -136,6 +141,15 @@ analytics-ui-setup
 После установки программу можно запустить через ярлык на рабочем столе или командой:
 ```bash
 analytics-ui
+```
+
+### 4. Удаление программы
+
+Чтобы полностью удалить программу, сначала удалите ярлыки, а затем сам пакет:
+
+```bash
+analytics-ui-uninstall
+pip3 uninstall analytics_ui_ogpz
 ```
 
 ### Возможные ошибки при установке .whl

@@ -1,1 +1,2 @@
 include analytics_ui/*.xlsx
+include analytics_ui/*.png

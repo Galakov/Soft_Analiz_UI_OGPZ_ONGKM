@@ -7,6 +7,7 @@ from openpyxl import load_workbook
 from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.styles import PatternFill, Border, Side, Alignment
 import numpy as np
+import logging
 
 def resource_path(relative_path):
     """Получает абсолютный путь к ресурсу, работает для dev, PyInstaller и pip install"""
@@ -874,15 +875,33 @@ class ExcelMerger:
             print(error_message)
             messagebox.showerror("Ошибка", error_message)
 
+def setup_logging():
+    """Configures logging to a file in the user's home directory."""
+    log_dir = os.path.join(os.path.expanduser("~"), ".analytics_ui")
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, "app.log")
+    
+    logging.basicConfig(
+        filename=log_file,
+        level=logging.ERROR,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    return log_file
+
 def main():
     try:
+        log_file = setup_logging()
+        print(f"Logging to: {log_file}")
         print("Starting application...")
+        
         root = tk.Tk()
         app = ExcelMerger(root)
         print("Entering main loop...")
         root.mainloop()
     except Exception as e:
-        print(f"Critical error: {e}")
+        error_msg = f"Critical error: {e}"
+        print(error_msg)
+        logging.critical(error_msg, exc_info=True)
         import traceback
         traceback.print_exc()
         input("Press Enter to exit...") # Keep window open if run from double-click

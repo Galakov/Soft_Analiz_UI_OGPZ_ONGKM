@@ -30,6 +30,13 @@ def create_shortcuts():
     
     print(f"Executable path: {exec_path}")
 
+    # Find icon path
+    icon_path = Path(__file__).parent / "icon.png"
+    if not icon_path.exists():
+        icon_path = "utilities-terminal" # Fallback
+    else:
+        icon_path = str(icon_path)
+
     # Desktop Entry content
     desktop_entry = f"""[Desktop Entry]
 Version=1.0
@@ -37,7 +44,7 @@ Type=Application
 Name=Аналитика УИ ОГПЗ
 Comment=Программа для объединения и анализа Excel файлов
 Exec={exec_path}
-Icon=utilities-terminal
+Icon={icon_path}
 Terminal=false
 Categories=Utility;Office;
 StartupNotify=true
@@ -74,5 +81,33 @@ StartupNotify=true
 
     print("\nSetup complete! You may need to restart your session or refresh the desktop.")
 
+def remove_shortcuts():
+    """Removes desktop shortcuts for the application."""
+    print("Removing shortcuts for Analytics UI...")
+    
+    home = Path.home()
+    
+    # Paths to remove
+    paths_to_remove = [
+        home / ".local" / "share" / "applications" / "analytics_ui.desktop",
+        home / "Desktop" / "analytics_ui.desktop",
+        home / "Рабочий стол" / "analytics_ui.desktop"
+    ]
+    
+    for path in paths_to_remove:
+        if path.exists():
+            try:
+                path.unlink()
+                print(f"Removed: {path}")
+            except Exception as e:
+                print(f"Error removing {path}: {e}")
+        else:
+            pass # File doesn't exist, which is fine
+
+    print("\nShortcuts removed.")
+
 if __name__ == "__main__":
-    create_shortcuts()
+    if len(sys.argv) > 1 and sys.argv[1] == "--remove":
+        remove_shortcuts()
+    else:
+        create_shortcuts()

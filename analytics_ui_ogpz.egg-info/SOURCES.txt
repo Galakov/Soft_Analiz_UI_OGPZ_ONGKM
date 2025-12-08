@@ -1,8 +1,8 @@
 MANIFEST.in
-excel_merger.py
 setup.py
 analytics_ui/__init__.py
 analytics_ui/excel_merger.py
+analytics_ui/icon.png
 analytics_ui/post_install.py
 analytics_ui/Правила названия столбцов.xlsx
 analytics_ui_ogpz.egg-info/PKG-INFO
