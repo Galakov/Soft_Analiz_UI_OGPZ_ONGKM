@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="analytics_ui_ogpz",
-    version="1.2.5",
+    version="1.3.3",
     packages=find_packages(),
     install_requires=[
         'pandas>=1.0',

@@ -126,7 +126,7 @@ chmod +x scripts/build_wheel.sh
     ```
     Если файл отобразился, установите его:
     ```bash
-    pip3 install analytics_ui_ogpz-1.2.4-py3-none-any.whl
+    pip3 install analytics_ui_ogpz-1.3.3-py3-none-any.whl
     ```
 
 ### 3. Настройка ярлыков
@@ -163,7 +163,7 @@ pip3 uninstall analytics_ui_ogpz
    ```
 2. Или попробуйте использовать команду через python:
    ```bash
-   python3 -m pip install analytics_ui_ogpz-1.2.0-py3-none-any.whl
+   python3 -m pip install analytics_ui_ogpz-1.3.3-py3-none-any.whl
    ```
 
 **Ошибка: `ModuleNotFoundError: No module named 'tkinter'`**
