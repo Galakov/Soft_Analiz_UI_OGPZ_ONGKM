@@ -11,3 +11,7 @@ analytics_ui_ogpz.egg-info/dependency_links.txt
 analytics_ui_ogpz.egg-info/entry_points.txt
 analytics_ui_ogpz.egg-info/requires.txt
 analytics_ui_ogpz.egg-info/top_level.txt
+docs/CODEWIKI.md
+docs/DOCUMENTATION.md
+docs/README_RedOS.md
+docs/TECHNICAL_DOCUMENTATION.md

@@ -7,6 +7,7 @@ from openpyxl import load_workbook
 from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.styles import PatternFill, Border, Side, Alignment
 import numpy as np
+import logging
 
 def resource_path(relative_path):
     """Получает абсолютный путь к ресурсу, работает для dev, PyInstaller и pip install"""
@@ -38,16 +39,19 @@ def apply_conditional_formatting(file_path):
         wb = load_workbook(filename=file_path)
         ws = wb.active
         
-        # Закрепляем первую строку и первый столбец
-        ws.freeze_panes = 'B2'
+        # Вставляем пустую строку сверху для диапазонов
+        ws.insert_rows(1)
+        
+        # Закрепляем заголовки (теперь они на 2 строке) и первый столбец
+        ws.freeze_panes = 'B3'
         
         # Получаем максимальное количество строк и столбцов
         max_row = ws.max_row
         max_col = ws.max_column
         print(f"Размер таблицы: {max_row} строк, {max_col} столбцов")
         
-        # Получаем заголовки столбцов
-        headers = [ws.cell(row=1, column=i).value for i in range(1, max_col + 1)]
+        # Получаем заголовки столбцов (теперь на 2 строке)
+        headers = [ws.cell(row=2, column=i).value for i in range(1, max_col + 1)]
         print(f"Заголовки столбцов: {headers}")
         
         # Создаем правило цветовой шкалы с использованием стандартных цветов Excel
@@ -66,14 +70,42 @@ def apply_conditional_formatting(file_path):
         rules_file = resource_path("Правила названия столбцов.xlsx")
         rules_df = pd.read_excel(rules_file, engine='openpyxl')
         
-        # Создаем словарь соответствия столбцов и узлов измерения
+        # Создаем словарь соответствия столбцов и узлов измерения, а также диапазонов
         column_to_node = {}
+        param_ranges = {}
+        
         for _, row in rules_df.iterrows():
             if len(row) >= 4:
                 new_name = str(row.iloc[2]).strip()
                 node_name = str(row.iloc[3]).strip()
                 if new_name and node_name:
                     column_to_node[new_name] = node_name
+                
+                # Попытка получить диапазоны и единицы измерения
+                if len(row) >= 7 and new_name:
+                    try:
+                        min_val = row.iloc[5]
+                        max_val = row.iloc[6]
+                        units = str(row.iloc[7]).strip() if len(row) >= 8 and pd.notna(row.iloc[7]) else ""
+                        
+                        # Если единицы измерения не заданы явно, определяем по имени параметра
+                        if not units:
+                            # Проверяем 4-й столбец (имя параметра), если он существует
+                            param_name = str(row.iloc[4]).strip() if len(row) >= 5 else ""
+                            check_name = param_name.lower() if param_name else new_name.lower()
+                            
+                            if "перепад давления" in check_name:
+                                units = "кгс/см2"
+                            elif "расход" in check_name:
+                                units = "тыс. м3/ч"
+                            elif "температура" in check_name:
+                                units = "°C"
+                        
+                        if pd.notna(min_val) and pd.notna(max_val):
+                            range_str = f"({min_val} ... {max_val} {units})".strip()
+                            param_ranges[new_name] = range_str
+                    except Exception:
+                        pass
         
         # Группируем столбцы по узлам измерения
         current_node = None
@@ -84,15 +116,26 @@ def apply_conditional_formatting(file_path):
         thick_border = Side(style='thick')
         
         # Создаем стиль выравнивания по центру
-        center_alignment = Alignment(horizontal='center', vertical='center')
+        center_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
         
         # Применяем форматирование и границы
         formatted_columns = 0
+        
+        # Словарь для отслеживания пар Параметр-Стрелка для объединения
+        merge_candidates = {} # {param_name: {'start_col': idx, 'end_col': idx}}
+        
         for col_idx in range(1, max_col + 1):
             try:
                 header = headers[col_idx - 1]
                 base_header = header.split(' ⚠')[0] if header and ' ⚠' in header else header
                 
+                # Если это заголовок с диапазоном, готовим объединение
+                if base_header in param_ranges:
+                    if base_header not in merge_candidates:
+                        merge_candidates[base_header] = {'start': col_idx, 'end': col_idx}
+                    else:
+                        merge_candidates[base_header]['end'] = col_idx
+
                 # Определяем узел измерения для текущего столбца
                 node = column_to_node.get(base_header)
                 
@@ -127,7 +170,7 @@ def apply_conditional_formatting(file_path):
                                 bottom=current_border.bottom
                             )
                 
-                # Применяем условное форматирование
+                # Применяем условное форматирование (данные теперь с 3 строки)
                 if header != "Время" and not header.endswith('⚠'):
                     col_letter = get_column_letter(col_idx)
                     
@@ -135,7 +178,7 @@ def apply_conditional_formatting(file_path):
                     ranges_to_format = []
                     current_range_start = None
                     
-                    for row in range(2, max_row + 1):
+                    for row in range(3, max_row + 1):
                         cell = ws[f'{col_letter}{row}']
                         cell_value = cell.value
                         
@@ -172,9 +215,7 @@ def apply_conditional_formatting(file_path):
                     else:
                         print(f"В столбце {header} нет ненулевых значений для форматирования")
                 
-                # Устанавливаем ширину столбцов и выравнивание по центру
-                ws.column_dimensions[col_letter].width = 19
-                # Применяем выравнивание по центру ко всем ячейкам в столбце
+                # Применяем выравнивание по центру ко всем ячейкам в столбце (включая новые заголовки)
                 for row in range(1, max_row + 1):
                     ws.cell(row=row, column=col_idx).alignment = center_alignment
                 
@@ -182,6 +223,55 @@ def apply_conditional_formatting(file_path):
                 print(f"Ошибка при форматировании столбца {get_column_letter(col_idx)}: {str(col_error)}")
                 continue
         
+        # Применяем объединение и тексты диапазонов
+        for param, coords in merge_candidates.items():
+            if param in param_ranges:
+                start_col = coords['start']
+                end_col = coords['end']
+                # Объединяем ячейки
+                ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=end_col)
+                # Пишем текст
+                cell = ws.cell(row=1, column=start_col)
+                cell.value = param_ranges[param]
+                cell.alignment = center_alignment
+
+        # Автоподбор ширины столбцов
+        for col_idx in range(1, max_col + 1):
+            col_letter = get_column_letter(col_idx)
+            max_length = 0
+            
+            # Проверяем заголовки (строки 1 и 2)
+            for row in [1, 2]:
+                cell = ws.cell(row=row, column=col_idx)
+                if cell.value:
+                    # Если ячейка объединена, длину делим на количество столбцов (грубо)
+                    is_merged = False
+                    for merged_range in ws.merged_cells.ranges:
+                        if cell.coordinate in merged_range:
+                            # Пропускаем расчет по объединенным ячейкам для простоты, 
+                            # или можно брать часть длины.
+                            # Здесь лучше ориентироваться на заголовок (стр 2) и данные
+                            if row == 1: is_merged = True
+                            break
+                    
+                    if not is_merged:
+                         max_length = max(max_length, len(str(cell.value)))
+
+            # Проверяем первые 100 строк данных для скорости
+            for row in range(3, min(max_row + 1, 103)):
+                cell = ws.cell(row=row, column=col_idx)
+                if cell.value:
+                    try:
+                         max_length = max(max_length, len(str(cell.value)))
+                    except:
+                        pass
+            
+            # Устанавливаем ширину с небольшим запасом
+            adjusted_width = (max_length + 2)
+            # Ограничиваем разумными пределами
+            adjusted_width = min(max(adjusted_width, 10), 50) 
+            ws.column_dimensions[col_letter].width = adjusted_width
+
         # Закрываем последнюю группу
         if current_node and node_start_col:
             for row in range(1, max_row + 1):
@@ -196,16 +286,26 @@ def apply_conditional_formatting(file_path):
         
         # Добавляем верхнюю и нижнюю границы для всех ячеек
         for col in range(1, max_col + 1):
-            # Верхняя граница для заголовка
+            # Верхняя граница (теперь строка 1)
             cell = ws.cell(row=1, column=col)
             current_border = cell.border
             cell.border = Border(
                 left=current_border.left,
                 right=current_border.right,
                 top=thick_border,
-                bottom=thin_border
+                bottom=current_border.bottom # Исправляем на обычную или сохраняем логику
             )
-            
+             # Граница под заголовками (строка 2)
+            cell = ws.cell(row=2, column=col)
+            current_border = cell.border
+            # Здесь можно добавить линию разделитель
+            cell.border = Border(
+                 left=current_border.left,
+                 right=current_border.right,
+                 top=current_border.top, # тонкая или толстая
+                 bottom=thin_border
+            )
+
             # Нижняя граница для последней строки
             cell = ws.cell(row=max_row, column=col)
             current_border = cell.border
@@ -238,6 +338,14 @@ def apply_conditional_formatting(file_path):
         except Exception as save_error:
             print(f"Ошибка при сохранении файла: {str(save_error)}")
             return False
+        
+    except Exception as e:
+        error_msg = f"Ошибка при применении условного форматирования: {str(e)}"
+        print(error_msg)
+        print(f"Тип ошибки: {type(e).__name__}")
+        import traceback
+        print(f"Полный стек ошибки:\n{traceback.format_exc()}")
+        return False
         
     except Exception as e:
         error_msg = f"Ошибка при применении условного форматирования: {str(e)}"
@@ -330,6 +438,10 @@ class ExcelMerger:
         # Кнопка для добавления файлов
         add_button = ttk.Button(left_frame, text="Добавить файлы", command=self.add_files)
         add_button.pack(pady=10)
+
+        # Кнопка для настройки диапазонов
+        ranges_button = ttk.Button(left_frame, text="Настройка диапазонов", command=self.open_range_editor)
+        ranges_button.pack(pady=5)
         
         # Список файлов
         self.files_frame = ttk.LabelFrame(left_frame, text="Выбранные файлы")
@@ -445,6 +557,10 @@ class ExcelMerger:
         
         # Загружаем параметры из файла правил
         self.load_parameters()
+        
+        # Авторское право
+        copyright_label = ttk.Label(right_frame, text="© Н.А. Галаков", font=("Arial", 8), foreground="gray")
+        copyright_label.pack(side=tk.BOTTOM, anchor=tk.E, padx=5, pady=5)
         
     def load_parameters(self):
         """Загружает параметры из файла правил"""
@@ -638,6 +754,118 @@ class ExcelMerger:
             messagebox.showerror("Ошибка", error_message)
             return {}
             
+    def open_range_editor(self):
+        """Открывает окно для редактирования диапазонов значений"""
+        editor = tk.Toplevel(self.root)
+        editor.title("Редактор диапазонов")
+        editor.geometry("600x400")
+        
+        # Создаем фрейм с прокруткой
+        canvas = tk.Canvas(editor)
+        scrollbar = ttk.Scrollbar(editor, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Загружаем текущие правила
+        try:
+            rules_file = resource_path("Правила названия столбцов.xlsx")
+            if not os.path.exists(rules_file):
+                messagebox.showerror("Ошибка", "Файл с правилами не найден")
+                return
+            
+            # Читаем Excel файл
+            df = pd.read_excel(rules_file, engine='openpyxl')
+            
+            entries = {}
+            
+            # Группируем по имени параметра (NewName - столбец index 2)
+            unique_params = df.iloc[:, 2].unique()
+            unique_params = [p for p in unique_params if pd.notna(p)]
+            unique_params.sort()
+            
+            for param_name in unique_params:
+                # Получаем текущие значения min/max для этого параметра
+                param_rows = df[df.iloc[:, 2] == param_name]
+                if param_rows.empty:
+                    continue
+                    
+                current_min = param_rows.iloc[0, 5] if len(param_rows.columns) > 5 else ""
+                current_max = param_rows.iloc[0, 6] if len(param_rows.columns) > 6 else ""
+                
+                if pd.isna(current_min): current_min = ""
+                if pd.isna(current_max): current_max = ""
+                
+                # Пропускаем параметры, у которых не заданы ни мин, ни макс значения
+                if current_min == "" and current_max == "":
+                    continue
+                
+                # UI для строки
+                frame = ttk.Frame(scrollable_frame)
+                frame.pack(fill="x", padx=5, pady=2)
+                
+                ttk.Label(frame, text=param_name, width=30).pack(side="left")
+                
+                ttk.Label(frame, text="Min:").pack(side="left")
+                min_entry = ttk.Entry(frame, width=10)
+                min_entry.insert(0, str(current_min))
+                min_entry.pack(side="left", padx=5)
+                
+                ttk.Label(frame, text="Max:").pack(side="left")
+                max_entry = ttk.Entry(frame, width=10)
+                max_entry.insert(0, str(current_max))
+                max_entry.pack(side="left", padx=5)
+                
+                entries[param_name] = (min_entry, max_entry)
+            
+            def save_changes():
+                try:
+                    for param_name, (min_e, max_e) in entries.items():
+                        new_min = min_e.get().strip()
+                        new_max = max_e.get().strip()
+                        
+                        try:
+                            val_min = float(new_min) if new_min else None
+                        except ValueError:
+                            val_min = None
+                            
+                        try:
+                            val_max = float(new_max) if new_max else None
+                        except ValueError:
+                            val_max = None
+                            
+                        mask = df.iloc[:, 2] == param_name
+                        if val_min is not None:
+                            df.loc[mask, df.columns[5]] = val_min
+                        else:
+                            df.loc[mask, df.columns[5]] = None
+                            
+                        if val_max is not None:
+                            df.loc[mask, df.columns[6]] = val_max
+                        else:
+                            df.loc[mask, df.columns[6]] = None
+
+                    df.to_excel(rules_file, index=False)
+                    messagebox.showinfo("Успех", "Диапазоны обновлены успешно")
+                    editor.destroy()
+                    
+                except Exception as e:
+                    messagebox.showerror("Ошибка сохранения", str(e))
+            
+            ttk.Button(editor, text="Сохранить", command=save_changes).pack(pady=10)
+            
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось инициализировать редактор: {e}")
+
     def update_time_range(self, df):
         """Обновляет диапазон времени на основе данных"""
         try:
@@ -874,15 +1102,33 @@ class ExcelMerger:
             print(error_message)
             messagebox.showerror("Ошибка", error_message)
 
+def setup_logging():
+    """Configures logging to a file in the user's home directory."""
+    log_dir = os.path.join(os.path.expanduser("~"), ".analytics_ui")
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, "app.log")
+    
+    logging.basicConfig(
+        filename=log_file,
+        level=logging.ERROR,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    return log_file
+
 def main():
     try:
+        log_file = setup_logging()
+        print(f"Logging to: {log_file}")
         print("Starting application...")
+        
         root = tk.Tk()
         app = ExcelMerger(root)
         print("Entering main loop...")
         root.mainloop()
     except Exception as e:
-        print(f"Critical error: {e}")
+        error_msg = f"Critical error: {e}"
+        print(error_msg)
+        logging.critical(error_msg, exc_info=True)
         import traceback
         traceback.print_exc()
         input("Press Enter to exit...") # Keep window open if run from double-click

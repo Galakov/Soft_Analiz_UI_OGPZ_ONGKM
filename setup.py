@@ -2,13 +2,13 @@ from setuptools import setup, find_packages
 
 setup(
     name="analytics_ui_ogpz",
-    version="1.3.3",
+    version="1.3.5",
     packages=find_packages(),
     install_requires=[
-        'pandas>=1.0',
-        'openpyxl>=3.0',
-        'xlrd>=2.0',
-        'numpy>=1.18',
+        'pandas>=1.0.0',
+        'openpyxl>=3.0.0',
+        'xlrd>=2.0.0',
+        'numpy>=1.18.0',
     ],
     entry_points={
         'console_scripts': [
