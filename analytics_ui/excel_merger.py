@@ -3,9 +3,9 @@ from tkinter import filedialog, ttk, messagebox
 import pandas as pd
 import os
 import sys
-from openpyxl import load_workbook
-from openpyxl.formatting.rule import ColorScaleRule
-from openpyxl.styles import PatternFill, Border, Side, Alignment
+# from openpyxl import load_workbook
+# from openpyxl.formatting.rule import ColorScaleRule
+# from openpyxl.styles import PatternFill, Border, Side, Alignment
 import numpy as np
 import logging
 
@@ -30,47 +30,39 @@ def get_column_letter(col_idx):
         result = chr(65 + remainder) + result
     return result
 
-def apply_conditional_formatting(file_path):
-    """Применяет условное форматирование к файлу Excel"""
+
+def format_data_workbook(writer, sheet_name, df, rules_file):
+    """
+    Форматирует лист с данными используя xlsxwriter (в один проход).
+    Добавляет заголовки, объединяет ячейки параметров, настраивает ширину и цвета.
+    """
     try:
-        print(f"Начинаем применять форматирование к файлу: {file_path}")
+        workbook = writer.book
+        worksheet = writer.sheets[sheet_name]
         
-        # Загружаем файл
-        wb = load_workbook(filename=file_path)
-        ws = wb.active
+        # Стили
+        header_format = workbook.add_format({
+            'bold': True,
+            'text_wrap': True,
+            'valign': 'vcenter',
+            'align': 'center',
+            'border': 1,
+            'bg_color': '#D9D9D9'
+        })
         
-        # Вставляем пустую строку сверху для диапазонов
-        ws.insert_rows(1)
+        center_format = workbook.add_format({
+            'align': 'center', 
+            'valign': 'vcenter'
+        })
         
-        # Закрепляем заголовки (теперь они на 2 строке) и первый столбец
-        ws.freeze_panes = 'B3'
-        
-        # Получаем максимальное количество строк и столбцов
-        max_row = ws.max_row
-        max_col = ws.max_column
-        print(f"Размер таблицы: {max_row} строк, {max_col} столбцов")
-        
-        # Получаем заголовки столбцов (теперь на 2 строке)
-        headers = [ws.cell(row=2, column=i).value for i in range(1, max_col + 1)]
-        print(f"Заголовки столбцов: {headers}")
-        
-        # Создаем правило цветовой шкалы с использованием стандартных цветов Excel
-        color_scale_rule = ColorScaleRule(
-            start_type='num',
-            start_value=0.000001,  # Минимальное значение, близкое к нулю
-            start_color='FFFF0000',  # Красный для низких значений
-            mid_type='percentile',
-            mid_value=50,
-            mid_color='FFFFFF00',    # Желтый для средних значений
-            end_type='max',
-            end_color='FF92D050'     # Зеленый для высоких значений
-        )
-        
-        # Читаем файл с правилами для получения информации об узлах измерения
-        rules_file = resource_path("Правила названия столбцов.xlsx")
-        rules_df = pd.read_excel(rules_file, engine='openpyxl')
-        
-        # Создаем словарь соответствия столбцов и узлов измерения, а также диапазонов
+        # 1. Подготовка данных для заголовков
+        # Читаем правила
+        try:
+            rules_df = pd.read_excel(rules_file, engine='openpyxl')
+        except:
+            rules_df = pd.DataFrame()
+
+        # Создаем маппинг
         column_to_node = {}
         param_ranges = {}
         
@@ -81,282 +73,120 @@ def apply_conditional_formatting(file_path):
                 if new_name and node_name:
                     column_to_node[new_name] = node_name
                 
-                # Попытка получить диапазоны и единицы измерения
+                # Попытка получить диапазоны
                 if len(row) >= 7 and new_name:
                     try:
                         min_val = row.iloc[5]
                         max_val = row.iloc[6]
                         units = str(row.iloc[7]).strip() if len(row) >= 8 and pd.notna(row.iloc[7]) else ""
                         
-                        # Если единицы измерения не заданы явно, определяем по имени параметра
                         if not units:
-                            # Проверяем 4-й столбец (имя параметра), если он существует
                             param_name = str(row.iloc[4]).strip() if len(row) >= 5 else ""
                             check_name = param_name.lower() if param_name else new_name.lower()
-                            
-                            if "перепад давления" in check_name:
-                                units = "кгс/см2"
-                            elif "расход" in check_name:
-                                units = "тыс. м3/ч"
-                            elif "температура" in check_name:
-                                units = "°C"
+                            if "перепад давления" in check_name: units = "кгс/см2"
+                            elif "расход" in check_name: units = "тыс. м3/ч"
+                            elif "температура" in check_name: units = "°C"
                         
                         if pd.notna(min_val) and pd.notna(max_val):
                             range_str = f"({min_val} ... {max_val} {units})".strip()
                             param_ranges[new_name] = range_str
-                    except Exception:
-                        pass
-        
-        # Группируем столбцы по узлам измерения
-        current_node = None
-        node_start_col = None
-        
-        # Создаем стили границ
-        thin_border = Side(style='thin')
-        thick_border = Side(style='thick')
-        
-        # Создаем стиль выравнивания по центру
-        center_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
-        
-        # Применяем форматирование и границы
-        formatted_columns = 0
-        
-        # Словарь для отслеживания пар Параметр-Стрелка для объединения
-        merge_candidates = {} # {param_name: {'start_col': idx, 'end_col': idx}}
-        
-        for col_idx in range(1, max_col + 1):
-            try:
-                header = headers[col_idx - 1]
-                base_header = header.split(' ⚠')[0] if header and ' ⚠' in header else header
-                
-                # Если это заголовок с диапазоном, готовим объединение
-                if base_header in param_ranges:
-                    if base_header not in merge_candidates:
-                        merge_candidates[base_header] = {'start': col_idx, 'end': col_idx}
-                    else:
-                        merge_candidates[base_header]['end'] = col_idx
-
-                # Определяем узел измерения для текущего столбца
-                node = column_to_node.get(base_header)
-                
-                # Обработка границ для группировки по узлам
-                if node:
-                    if node != current_node:
-                        # Закрываем предыдущую группу
-                        if current_node and node_start_col:
-                            # Устанавливаем правую границу для предыдущей группы
-                            for row in range(1, max_row + 1):
-                                cell = ws.cell(row=row, column=col_idx-1)
-                                current_border = cell.border
-                                cell.border = Border(
-                                    left=current_border.left,
-                                    right=thick_border,
-                                    top=current_border.top,
-                                    bottom=current_border.bottom
-                                )
-                        
-                        # Начинаем новую группу
-                        current_node = node
-                        node_start_col = col_idx
-                        
-                        # Устанавливаем левую границу для новой группы
-                        for row in range(1, max_row + 1):
-                            cell = ws.cell(row=row, column=col_idx)
-                            current_border = cell.border
-                            cell.border = Border(
-                                left=thick_border,
-                                right=current_border.right,
-                                top=current_border.top,
-                                bottom=current_border.bottom
-                            )
-                
-                # Применяем условное форматирование (данные теперь с 3 строки)
-                if header != "Время" and not header.endswith('⚠'):
-                    col_letter = get_column_letter(col_idx)
-                    
-                    # Создаем список диапазонов для форматирования, исключая ячейки с нулевыми значениями
-                    ranges_to_format = []
-                    current_range_start = None
-                    
-                    for row in range(3, max_row + 1):
-                        cell = ws[f'{col_letter}{row}']
-                        cell_value = cell.value
-                        
-                        try:
-                            if cell_value is not None:
-                                numeric_value = float(str(cell_value).replace(',', '.').strip())
-                                if numeric_value != 0:
-                                    if current_range_start is None:
-                                        current_range_start = row
-                                else:
-                                    if current_range_start is not None:
-                                        range_str = f'{col_letter}{current_range_start}:{col_letter}{row-1}'
-                                        ranges_to_format.append(range_str)
-                                        current_range_start = None
-                        except (ValueError, TypeError):
-                            if current_range_start is not None:
-                                range_str = f'{col_letter}{current_range_start}:{col_letter}{row-1}'
-                                ranges_to_format.append(range_str)
-                                current_range_start = None
-                    
-                    # Добавляем последний диапазон, если он есть
-                    if current_range_start is not None:
-                        range_str = f'{col_letter}{current_range_start}:{col_letter}{max_row}'
-                        ranges_to_format.append(range_str)
-                    
-                    # Применяем форматирование к каждому диапазону
-                    for range_str in ranges_to_format:
-                        print(f"Применяем форматирование к диапазону: {range_str}")
-                        ws.conditional_formatting.add(range_str, color_scale_rule)
-                    
-                    if ranges_to_format:
-                        print(f"Форматирование успешно применено к столбцу {header}")
-                        formatted_columns += 1
-                    else:
-                        print(f"В столбце {header} нет ненулевых значений для форматирования")
-                
-                # Применяем выравнивание по центру ко всем ячейкам в столбце (включая новые заголовки)
-                for row in range(1, max_row + 1):
-                    ws.cell(row=row, column=col_idx).alignment = center_alignment
-                
-            except Exception as col_error:
-                print(f"Ошибка при форматировании столбца {get_column_letter(col_idx)}: {str(col_error)}")
-                continue
-        
-        # Применяем объединение и тексты диапазонов
-        for param, coords in merge_candidates.items():
-            if param in param_ranges:
-                start_col = coords['start']
-                end_col = coords['end']
-                # Объединяем ячейки
-                ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=end_col)
-                # Пишем текст
-                cell = ws.cell(row=1, column=start_col)
-                cell.value = param_ranges[param]
-                cell.alignment = center_alignment
-
-        # Автоподбор ширины столбцов
-        for col_idx in range(1, max_col + 1):
-            col_letter = get_column_letter(col_idx)
-            max_length = 0
-            
-            # Проверяем заголовки (строки 1 и 2)
-            for row in [1, 2]:
-                cell = ws.cell(row=row, column=col_idx)
-                if cell.value:
-                    # Если ячейка объединена, длину делим на количество столбцов (грубо)
-                    is_merged = False
-                    for merged_range in ws.merged_cells.ranges:
-                        if cell.coordinate in merged_range:
-                            # Пропускаем расчет по объединенным ячейкам для простоты, 
-                            # или можно брать часть длины.
-                            # Здесь лучше ориентироваться на заголовок (стр 2) и данные
-                            if row == 1: is_merged = True
-                            break
-                    
-                    if not is_merged:
-                         max_length = max(max_length, len(str(cell.value)))
-
-            # Проверяем первые 100 строк данных для скорости
-            for row in range(3, min(max_row + 1, 103)):
-                cell = ws.cell(row=row, column=col_idx)
-                if cell.value:
-                    try:
-                         max_length = max(max_length, len(str(cell.value)))
                     except:
                         pass
-            
-            # Устанавливаем ширину с небольшим запасом
-            adjusted_width = (max_length + 2)
-            # Ограничиваем разумными пределами
-            adjusted_width = min(max(adjusted_width, 10), 50) 
-            ws.column_dimensions[col_letter].width = adjusted_width
 
-        # Закрываем последнюю группу
-        if current_node and node_start_col:
-            for row in range(1, max_row + 1):
-                cell = ws.cell(row=row, column=max_col)
-                current_border = cell.border
-                cell.border = Border(
-                    left=current_border.left,
-                    right=thick_border,
-                    top=current_border.top,
-                    bottom=current_border.bottom
-                )
+        # 2. Запись заголовков (Строки 1 и 2 в Excel -> 0 и 1 индексы)
+        headers = df.columns.tolist()
         
-        # Добавляем верхнюю и нижнюю границы для всех ячеек
-        for col in range(1, max_col + 1):
-            # Верхняя граница (теперь строка 1)
-            cell = ws.cell(row=1, column=col)
-            current_border = cell.border
-            cell.border = Border(
-                left=current_border.left,
-                right=current_border.right,
-                top=thick_border,
-                bottom=current_border.bottom # Исправляем на обычную или сохраняем логику
-            )
-             # Граница под заголовками (строка 2)
-            cell = ws.cell(row=2, column=col)
-            current_border = cell.border
-            # Здесь можно добавить линию разделитель
-            cell.border = Border(
-                 left=current_border.left,
-                 right=current_border.right,
-                 top=current_border.top, # тонкая или толстая
-                 bottom=thin_border
-            )
+        # Группировка для объединения (Строка 0)
+        # Ищем последовательные столбцы с одинаковым параметром для range_str
+        current_param_range = None
+        merge_start_col = 0
+        
+        # Замораживаем панели
+        worksheet.freeze_panes(2, 1) # 2 строки заголовка, 1 столбец слева
+        
+        for i, header in enumerate(headers):
+            # Запись заголовка столбца (Строка 1)
+            worksheet.write(1, i, header, header_format)
+            
+            # Логика объединения для строки 0
+            base_header = header.split(' ⚠')[0] if ' ⚠' in header else header
+            param_range_str = param_ranges.get(base_header)
+            
+            if i == 0:
+                current_param_range = param_range_str
+                merge_start_col = 0
+            else:
+                if param_range_str != current_param_range:
+                    # Записываем предыдущую группу
+                    if current_param_range:
+                        if i - 1 > merge_start_col:
+                            worksheet.merge_range(0, merge_start_col, 0, i - 1, current_param_range, header_format)
+                        else:
+                            worksheet.write(0, merge_start_col, current_param_range, header_format)
+                    # Начинаем новую
+                    current_param_range = param_range_str
+                    merge_start_col = i
+                
+        # Записываем последнюю группу
+        if current_param_range:
+             if len(headers) - 1 > merge_start_col:
+                worksheet.merge_range(0, merge_start_col, 0, len(headers) - 1, current_param_range, header_format)
+             else:
+                worksheet.write(0, merge_start_col, current_param_range, header_format)
 
-            # Нижняя граница для последней строки
-            cell = ws.cell(row=max_row, column=col)
-            current_border = cell.border
-            cell.border = Border(
-                left=current_border.left,
-                right=current_border.right,
-                top=current_border.top,
-                bottom=thick_border
-            )
+        # 3. Настройка ширины столбцов и границ
+        # Границы групп узлов
+        current_node = None
+        node_start_col = 0
         
-        print(f"Всего отформатировано столбцов: {formatted_columns}")
+        thick_border_fmt = workbook.add_format({'left': 2}) # Thick left border
         
-        # Сохраняем изменения
-        print("Сохраняем изменения в файл...")
-        try:
-            # Сначала сохраняем во временный файл
-            temp_file = file_path.replace('.xlsx', '_temp.xlsx')
-            wb.save(temp_file)
-            wb.close()
+        for i, header in enumerate(headers):
+            base_header = header.split(' ⚠')[0] if ' ⚠' in header else header
+            node = column_to_node.get(base_header)
             
-            # Если сохранение прошло успешно, заменяем исходный файл
-            import os
-            if os.path.exists(file_path):
-                os.remove(file_path)
-            os.rename(temp_file, file_path)
+            # Ширина столбца
+            max_len = len(str(header))
+            # Примерная ширина по данным (первые 50 строк)
+            for val in df.iloc[:50, i].astype(str):
+                max_len = max(max_len, len(val))
+            worksheet.set_column(i, i, min(max_len + 2, 50))
             
-            print("Форматирование успешно применено и файл сохранен")
-            return True
-            
-        except Exception as save_error:
-            print(f"Ошибка при сохранении файла: {str(save_error)}")
-            return False
-        
+            # Условное форматирование (Color Scale) для данных
+            if header != 'Время' and not header.endswith('⚠'):
+                # Определяем диапазон данных (с 3-й строки Excel, индекс 2)
+                # end_row = len(df) + 2 - 1
+                # range_str = f"{get_column_letter(i+1)}3:{get_column_letter(i+1)}{len(df)+2}"
+                # xlsxwriter conditional format
+                worksheet.conditional_format(2, i, len(df)+1, i, {
+                    'type': '3_color_scale',
+                    'min_color': '#FF0000', # Red
+                    'mid_color': '#FFFF00', # Yellow
+                    'max_color': '#92D050'  # Green
+                })
+
+            # Границы узлов (визуально отделяем группы)
+            if node:
+                if node != current_node:
+                    if i > 0: # Не для первого столбца
+                        # Применяем левую границу ко всему столбцу (через cond format hack или просто set_column?)
+                        # set_column перетрет ширину.
+                        # cond format hack: Always True
+                        worksheet.conditional_format(0, i, len(df)+1, i, {
+                            'type': 'formula',
+                            'criteria': '=TRUE',
+                            'format': thick_border_fmt
+                        })
+                    current_node = node
+                    
     except Exception as e:
-        error_msg = f"Ошибка при применении условного форматирования: {str(e)}"
-        print(error_msg)
-        print(f"Тип ошибки: {type(e).__name__}")
+        print(f"Ошибка при форматировании данных: {e}")
         import traceback
-        print(f"Полный стек ошибки:\n{traceback.format_exc()}")
-        return False
-        
-    except Exception as e:
-        error_msg = f"Ошибка при применении условного форматирования: {str(e)}"
-        print(error_msg)
-        print(f"Тип ошибки: {type(e).__name__}")
-        import traceback
-        print(f"Полный стек ошибки:\n{traceback.format_exc()}")
-        return False
+        traceback.print_exc()
 
 def add_arrow_columns(df, rules_file):
     """Добавляет столбцы со стрелками для значений вне диапазона min-max"""
+    df = df.copy()
     try:
         # Читаем файл с правилами
         rules_df = pd.read_excel(rules_file, engine='openpyxl')
@@ -1065,6 +895,10 @@ class ExcelMerger:
             # Добавляем столбцы со стрелками перед сохранением
             merged_df, param_to_node = add_arrow_columns(merged_df, rules_file)
             
+            # Сортируем по времени перед сохранением, чтобы спарклайны были корректными
+            if 'Время' in merged_df.columns:
+                 merged_df.sort_values(by='Время', inplace=True)
+            
             # Сохранение результата
             output_file = filedialog.asksaveasfilename(
                 defaultextension=".xlsx",
@@ -1076,22 +910,47 @@ class ExcelMerger:
                 try:
                     print(f"Начинаем сохранение результата в файл: {output_file}")
                     
-                    # Сохраняем данные
-                    merged_df.to_excel(output_file, index=False, engine='openpyxl')
-                    print("Данные успешно сохранены")
+                    # Сбрасываем индекс, чтобы он соответствовал номерам строк в Excel (начиная с 0 -> Row 2)
+                    # Это критично для правильной адресации спарклайнов
+                    merged_df.reset_index(drop=True, inplace=True)
+                    
+                    # Преобразуем числовые данные (заменяем запятые на точки и конвертируем в float)
+                    # Это необходимо для правильной работы спарклайнов и графиков
+                    print("Преобразование данных в числа...")
+                    for col in merged_df.columns:
+                        if col != 'Время' and not col.endswith('⚠'):
+                            try:
+                                # Если столбец типа object (строки), пробуем конвертировать
+                                if merged_df[col].dtype == 'object':
+                                    merged_df[col] = merged_df[col].astype(str).str.replace(',', '.', regex=False)
+                                    merged_df[col] = pd.to_numeric(merged_df[col], errors='coerce')
+                            except Exception as conv_err:
+                                print(f"Не удалось конвертировать столбец {col}: {conv_err}")
+
+
+
+
+                    # Используем xlsxwriter для поддержки спарклайнов
+                    with pd.ExcelWriter(output_file, engine='xlsxwriter', datetime_format='yyyy-mm-dd hh:mm:ss') as writer:
+                        # Сохраняем основные данные, начиная со 2 строки (индекс 2), чтобы оставить место для заголовков
+                        merged_df.to_excel(writer, sheet_name='Данные', index=False, startrow=2, header=False)
+                        
+                        # Форматируем лист Данные
+                        print("Форматируем лист Данные...")
+                        format_data_workbook(writer, 'Данные', merged_df, rules_file)
+                        
+                        # Создаем лист Dashboard
+                        print("Создаем лист Dashboard...")
+                        create_dashboard_sheet(writer, merged_df, rules_file, node_allowed_columns)
+                        
+                    print("Данные и Dashboard успешно сохранены")
                     
                     # Закрываем все открытые файлы Excel
                     import gc
                     gc.collect()
                     
-                    # Затем применяем условное форматирование
-                    print("Начинаем применять форматирование...")
-                    if apply_conditional_formatting(output_file):
-                        messagebox.showinfo("Успех", "Файлы успешно объединены и отформатированы!")
-                    else:
-                        messagebox.showwarning("Предупреждение", 
-                            "Файлы объединены, но не удалось применить форматирование.\n"
-                            "Проверьте, не открыт ли файл в Excel.")
+                    messagebox.showinfo("Успех", "Файлы успешно объединены, создан Dashboard!")
+
                 except Exception as save_error:
                     error_message = f"Ошибка при сохранении файла: {str(save_error)}"
                     print(error_message)
@@ -1101,6 +960,290 @@ class ExcelMerger:
             error_message = f"Произошла ошибка при объединении файлов: {str(e)}"
             print(error_message)
             messagebox.showerror("Ошибка", error_message)
+
+def create_dashboard_sheet(writer, df, rules_file, allowed_columns):
+    """
+    Создает лист Dashboard с Timeline Heatmap и Sparklines.
+    """
+    try:
+        workbook = writer.book
+        worksheet = workbook.add_worksheet('Dashboard')
+        
+        # Стили
+        header_format = workbook.add_format({
+            'bold': True,
+            'text_wrap': True,
+            'valign': 'vcenter',
+            'align': 'center',
+            'border': 1,
+            'bg_color': '#D9D9D9'
+        })
+        
+        node_format = workbook.add_format({
+            'bold': True,
+            'valign': 'vcenter',
+            'border': 1
+        })
+        
+        # Цвета для статусов (с форматом чисел)
+        # 0.00 - два знака после запятой
+        num_format = '0.00'
+        
+        green_format = workbook.add_format({'bg_color': '#C6EFCE', 'border': 1, 'num_format': num_format, 'valign': 'vcenter', 'align': 'center', 'bold': True, 'font_size': 12, 'font_color': '#000000'}) # Good
+        red_format = workbook.add_format({'bg_color': '#FFC7CE', 'border': 1, 'num_format': num_format, 'valign': 'vcenter', 'align': 'center', 'bold': True, 'font_size': 12, 'font_color': '#000000'})   # Bad
+        grey_format = workbook.add_format({'bg_color': '#F2F2F2', 'border': 1, 'num_format': num_format, 'valign': 'vcenter', 'align': 'center', 'bold': True, 'font_size': 12, 'font_color': '#000000'})  # No Data/Zero
+        
+        # 1. Подготовка данных
+        # Определяем столбцы расхода для каждого узла
+        # Считываем правила снова, чтобы найти Qmin/Qmax для каждого параметра
+        rules_df = pd.read_excel(rules_file, engine='openpyxl')
+        
+        # Структура: {NodeName: {FlowCol: col_name, Qmin: val, Qmax: val, Units: str}}
+        node_config = {}
+        
+        # Находим столбцы расхода
+        for col in df.columns:
+            if col not in allowed_columns:
+                continue
+                
+            # Ищем правило для этого столбца (по NewName)
+            rule_row = rules_df[rules_df.iloc[:, 2] == col]
+            if not rule_row.empty:
+                param_name = str(rule_row.iloc[0, 4]).strip()
+                node_name = str(rule_row.iloc[0, 3]).strip()
+                
+                # Простейшая эвристика для определения "расхода"
+                if "расход" in param_name.lower():
+                    qmin = rule_row.iloc[0, 5] if len(rule_row.columns) > 5 else None
+                    qmax = rule_row.iloc[0, 6] if len(rule_row.columns) > 6 else None
+                    units = str(rule_row.iloc[0, 7]).strip() if len(rule_row.columns) > 7 and pd.notna(rule_row.iloc[0, 7]) else ""
+
+                    if not units:
+                        if "расход" in param_name.lower(): units = "тыс. м3/ч"
+                    
+                    try:
+                        qmin = float(qmin) if pd.notna(qmin) else 0
+                        qmax = float(qmax) if pd.notna(qmax) else float('inf')
+                    except:
+                        qmin, qmax = 0, float('inf')
+                        
+                    node_config[node_name] = {
+                        'col': col,
+                        'qmin': qmin,
+                        'qmax': qmax,
+                        'units': units,
+                        'col_idx': df.columns.get_loc(col) # Индекс в dataframe (0-based)
+                    }
+
+        if not node_config:
+            worksheet.write(0, 0, "Не найдены параметры расхода для построения Dashboard")
+            return
+
+        # Группировка по датам (дни)
+        if 'Время' not in df.columns:
+             worksheet.write(0, 0, "Ошибка: нет столбца Время")
+             return
+
+        df['Date'] = pd.to_datetime(df['Время']).dt.date
+        unique_dates = sorted(df['Date'].dropna().unique())
+        unique_nodes = sorted(node_config.keys())
+        
+        num_days = len(unique_dates)
+        
+        # 2. Заголовки
+        worksheet.write(0, 0, "Узел / (Доп. диапазон)", header_format)
+        worksheet.set_column(0, 0, 30) # Ширина первого столбца
+        
+        # Новый столбец статистики с динамическим заголовком
+        worksheet.write(0, 1, f"Выход за диапазон\nза период {num_days} суток", header_format)
+        worksheet.set_column(1, 1, 18)
+        
+        worksheet.freeze_panes(2, 2)   # Закрепить заголовки (2 строки) и первые два столбца
+        
+        for j, date in enumerate(unique_dates):
+            worksheet.write(0, j + 2, date.strftime('%d.%m.%Y'), header_format)
+            worksheet.set_column(j + 2, j + 2, 20) # Ширина столбцов с датами (увеличил для (тыс. м3))
+            
+        # 3. Заполнение матрицы
+        # Словарь {date: [start_row, end_row]} (0-based indices in DF)
+        date_ranges = {}
+        # Предполагаем, что df отсортирован по времени
+        for date in unique_dates:
+            # Находим индексы строк для этой даты
+            mask = df['Date'] == date
+            indices = df.index[mask].tolist()
+            if indices:
+                start = indices[0]
+                end = indices[-1]
+                date_ranges[date] = (start, end)
+        
+        # Словари для подсчета итогов
+        total_days_sum = 0
+        total_hours_sum = 0
+        daily_sums = {date: 0.0 for date in unique_dates}
+        
+        # Оформление строки Итого (строка 1)
+        worksheet.write(1, 0, "Итого", header_format)
+        
+        # Формат для итогов с единицами измерения
+        total_data_format = workbook.add_format({
+            'bold': True,
+            'align': 'center',
+            'valign': 'vcenter',
+            'bg_color': '#D9D9D9',
+            'border': 1,
+            'font_size': 12,
+            'num_format': '# ##0 " (тыс. м3)"'
+        })
+        
+        for i, node in enumerate(unique_nodes):
+            row_idx = i + 2 # Смещаем на 2 (Заголовок + Итого)
+            worksheet.set_row(row_idx, 40) # Увеличиваем высоту строки для наглядности графика
+            
+            config = node_config[node]
+            qmin = config['qmin']
+            qmax = config['qmax']
+            units = config['units']
+            
+            # Формируем подпись с диапазоном
+            qmin_str = f"{qmin:g}"
+            if qmax == float('inf'):
+                qmax_str = "∞"
+            else:
+                qmax_str = f"{qmax:g}"
+            
+            node_label = f"{node}\n({qmin_str} ... {qmax_str} {units})"
+            worksheet.write(row_idx, 0, node_label, node_format)
+            
+            col_name = config['col']
+            col_idx_in_data = config['col_idx'] # 0-based column index in Data sheet
+            
+            col_letter = get_column_letter(col_idx_in_data + 1) # Excel 1-based letter
+            
+            # Переменные для статистики по узлу
+            total_violation_days = 0
+            total_violation_hours = 0
+            
+            for j, date in enumerate(unique_dates):
+                col_idx = j + 2 # Смещаем на 2 столбца (Узел, Статистика)
+                
+                if date in date_ranges:
+                    start_row, end_row = date_ranges[date]
+                    # Convert to Excel row numbers (1-based)
+                    # Sheet 'Данные': Row 1 is header. Data starts Row 2.
+                    # DF index 0 -> Excel Row 2.
+                    excel_start = start_row + 2
+                    excel_end = end_row + 2
+                    
+                    data_range = f"'Данные'!{col_letter}{excel_start}:{col_letter}{excel_end}"
+                    
+                    # Анализ данных для определния цвета фона (статус) и суммы
+                    values = df.iloc[start_row:end_row+1, config['col_idx']]
+                    vals = pd.to_numeric(values, errors='coerce').fillna(0)
+                    
+                    day_sum = vals.sum()
+                    daily_sums[date] += day_sum # Суммируем для итога
+                    
+                    status_format = grey_format # Default
+                    is_zero = False
+                    
+                    # Статистика нарушений за день
+                    day_violation_hours = 0
+                    
+                    if vals.max() == 0 and vals.min() == 0:
+                         status_format = grey_format
+                         is_zero = True
+                    else:
+                        has_violation = False
+                        
+                        # Check min (exclude 0)
+                        # Считаем количество часов с нарушением мин
+                        min_violations = (vals < qmin) & (vals != 0)
+                        
+                        # Check max
+                        max_violations = vals > qmax
+                        
+                        # Общее количество часов с нарушениями
+                        violations_mask = min_violations | max_violations
+                        day_violation_hours = violations_mask.sum()
+                        
+                        if day_violation_hours > 0:
+                            has_violation = True
+                            
+                        if has_violation:
+                            status_format = red_format
+                            total_violation_days += 1
+                        else:
+                            status_format = green_format
+                            
+                    total_violation_hours += day_violation_hours
+                    
+                    # Пишем сумму в ячейку с форматом фона
+                    worksheet.write_number(row_idx, col_idx, day_sum, status_format)
+                    
+                    # Рисуем график только если не ноль
+                    if not is_zero:
+                        spark_color = '#595959' 
+                        if status_format == red_format:
+                             spark_color = '#A54040' # Еще более бледный темно-красный
+                        elif status_format == green_format:
+                             spark_color = '#407040' # Еще более бледный темно-зеленый
+                             
+                        options = {
+                            'range': data_range,
+                            'type': 'line',
+                            'markers': False,
+                            'weight': 1.0, # Тоньше линия
+                            'series_color': spark_color,
+                            'high_point': False,
+                            'low_point': False,
+                        }
+                        worksheet.add_sparkline(row_idx, col_idx, options)
+                    
+                else:
+                    worksheet.write(row_idx, col_idx, "Н/Д", grey_format)
+            
+            # Накапливаем итоговую статистику
+            total_days_sum += total_violation_days
+            total_hours_sum += total_violation_hours
+            
+            # Записываем статистику в столбец 1
+            stats_text = f"{total_violation_days} сут.; {int(total_violation_hours)} ч."
+            stats_fmt = green_format
+            if total_violation_hours > 0:
+                stats_fmt = red_format
+            
+            worksheet.write(row_idx, 1, stats_text, stats_fmt)
+            
+        # Записываем итоги в строку 1
+        # Итог по статистике
+        total_stats_text = f"{total_days_sum} сут.; {int(total_hours_sum)} ч."
+        # Используем специальный формат для выделения красным
+        total_stats_fmt = workbook.add_format({
+            'bold': True,
+            'align': 'center',
+            'valign': 'vcenter',
+            'bg_color': '#D9D9D9',
+            'border': 1,
+            'font_size': 12,
+            'font_color': '#FF0000' # Красный шрифт
+        })
+        worksheet.write(1, 1, total_stats_text, total_stats_fmt)
+        
+        # Итоги по датам
+        for j, date in enumerate(unique_dates):
+            col_idx = j + 2
+            val = daily_sums.get(date, 0)
+            worksheet.write_number(1, col_idx, val, total_data_format)
+            
+        # Делаем лист активным при открытии
+        worksheet.activate()
+
+    except Exception as e:
+        print(f"Ошибка при создании Dashboard: {e}")
+        import traceback
+        traceback.print_exc()
+
 
 def setup_logging():
     """Configures logging to a file in the user's home directory."""
