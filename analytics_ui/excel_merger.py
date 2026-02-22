@@ -8,6 +8,7 @@ import sys
 # from openpyxl.styles import PatternFill, Border, Side, Alignment
 import numpy as np
 import logging
+import unicodedata
 
 def resource_path(relative_path):
     """Получает абсолютный путь к ресурсу, работает для dev, PyInstaller и pip install"""
@@ -497,20 +498,30 @@ class ExcelMerger:
             
             # Для каждого файла находим соответствующие узлы измерения
             for file in self.files:
-                filename = os.path.basename(file).lower()
+                filename = unicodedata.normalize('NFC', os.path.basename(file).lower())
+                base_filename = unicodedata.normalize('NFC', os.path.splitext(filename)[0])
+                logging.info(f"DEBUG: Processing file '{filename}', basename '{base_filename}'")
                 
                 # Ищем соответствующие правила
                 for _, row in rules_df.iterrows():
                     if len(row) >= 4:  # Проверяем наличие столбца с названием узла
                         file_pattern = str(row.iloc[0]).strip().lower()
+                        file_pattern = unicodedata.normalize('NFC', file_pattern)
                         node_name = str(row.iloc[3]).strip()  # Предполагаем, что название узла в 4-м столбце
                         
                         # Проверяем, что значения не являются NaN и не пустые
                         if (pd.notna(file_pattern) and pd.notna(node_name) 
                             and file_pattern and node_name 
-                            and file_pattern in filename
                             and node_name.lower() != 'nan'):  # Добавляем проверку на 'nan'
-                            measurement_nodes.add(node_name)
+                            
+                            match = (file_pattern in filename or base_filename in file_pattern)
+                            if match:
+                                logging.info(f"DEBUG: MATCH FOUND! '{base_filename}' matches pattern '{file_pattern}' -> node '{node_name}'")
+                                measurement_nodes.add(node_name)
+                            elif '368fq' in filename or '140fq' in filename:
+                                # Log near misses
+                                if base_filename[:20] == file_pattern[:20]:
+                                    logging.info(f"DEBUG: NEAR MISS? file='{base_filename}', pattern='{file_pattern}'")
             
             # Добавляем найденные узлы и создаем чекбоксы
             for node in sorted(measurement_nodes):
@@ -554,25 +565,25 @@ class ExcelMerger:
             
             # Ищем правила для данного файла
             rename_dict = {}
-            filename = os.path.basename(filename).lower()  # Получаем имя файла без пути
+            filename = unicodedata.normalize('NFC', os.path.basename(filename).lower())  # Получаем имя файла без пути и нормализуем
             
             # Получаем список выбранных параметров
             selected_parameters = [param for param, var in self.parameter_vars.items() if var.get()]
             
             # Перебираем все строки в файле правил
             for _, row in rules_df.iterrows():
-                # Проверяем, что все необходимые столбцы существуют
-                if len(row) >= 5:  # Должно быть как минимум 5 столбцов
-                    file_pattern = str(row.iloc[0]).strip().lower()  # Паттерн файла
-                    old_name = str(row.iloc[1]).strip()  # Старое название столбца
-                    new_name = str(row.iloc[2]).strip()  # Новое название столбца
-                    parameter = str(row.iloc[4]).strip()  # Параметр
+                if len(row) >= 5:  # Проверяем наличие нужных столбцов
+                    file_pattern = str(row.iloc[0]).strip().lower()
+                    file_pattern = unicodedata.normalize('NFC', file_pattern)
+                    old_name = str(row.iloc[1]).strip()
+                    new_name = str(row.iloc[2]).strip()
+                    parameter = str(row.iloc[4]).strip()
                     
-                    # Если имя файла содержит паттерн и названия не пустые
+                    # Проверяем, что значения не являются NaN и не пустые
                     if (pd.notna(file_pattern) and pd.notna(old_name) and pd.notna(new_name) and pd.notna(parameter)
                         and file_pattern and old_name and new_name and parameter
-                        and file_pattern in filename
-                        and parameter in selected_parameters):  # Проверяем, выбран ли параметр
+                        and (file_pattern in filename or os.path.splitext(filename)[0] in file_pattern)
+                        and parameter in selected_parameters):
                         rename_dict[old_name] = new_name
                         print(f"Найдено правило для файла '{filename}': '{old_name}' -> '{new_name}' (Параметр: {parameter})")
             
@@ -876,6 +887,11 @@ class ExcelMerger:
             
             # Объединение всех датафреймов по столбцам
             merged_df = pd.concat(dfs, axis=1)
+            
+            # Удаляем дублирующиеся столбцы (например, если один и тот же файл был добавлен дважды)
+            # Это критично для избежания ошибок get_loc во время обработки Excel
+            merged_df = merged_df.loc[:, ~merged_df.columns.duplicated()].copy()
+            
             print("\nСтолбцы после объединения:", list(merged_df.columns))
             
             # Добавляем временной столбец в начало
@@ -969,6 +985,9 @@ def create_dashboard_sheet(writer, df, rules_file, allowed_columns):
         workbook = writer.book
         worksheet = workbook.add_worksheet('Dashboard')
         
+        # Базовые шрифты
+        font_name = 'Arial'
+        
         # Стили
         header_format = workbook.add_format({
             'bold': True,
@@ -976,22 +995,44 @@ def create_dashboard_sheet(writer, df, rules_file, allowed_columns):
             'valign': 'vcenter',
             'align': 'center',
             'border': 1,
-            'bg_color': '#D9D9D9'
+            'bg_color': '#D9D9D9',
+            'font_name': font_name,
+            'font_size': 10
         })
         
         node_format = workbook.add_format({
             'bold': True,
             'valign': 'vcenter',
-            'border': 1
+            'align': 'center',
+            'border': 1,
+            'font_name': font_name,
+            'font_size': 10
+        })
+        
+        # Для пустой ячейки (A2)
+        empty_corner_format = workbook.add_format({
+            'border': 1,
+            'bg_color': '#FFFFFF'
+        })
+        
+        # Для "Итого:" (правое выравнивание)
+        itogo_label_format = workbook.add_format({
+            'bold': True,
+            'valign': 'vcenter',
+            'align': 'right',
+            'border': 1,
+            'bg_color': '#FFFFFF',
+            'font_name': font_name,
+            'font_size': 14
         })
         
         # Цвета для статусов (с форматом чисел)
-        # 0.00 - два знака после запятой
-        num_format = '0.00'
+        num_format = '# ##0.00'
         
-        green_format = workbook.add_format({'bg_color': '#C6EFCE', 'border': 1, 'num_format': num_format, 'valign': 'vcenter', 'align': 'center', 'bold': True, 'font_size': 12, 'font_color': '#000000'}) # Good
-        red_format = workbook.add_format({'bg_color': '#FFC7CE', 'border': 1, 'num_format': num_format, 'valign': 'vcenter', 'align': 'center', 'bold': True, 'font_size': 12, 'font_color': '#000000'})   # Bad
-        grey_format = workbook.add_format({'bg_color': '#F2F2F2', 'border': 1, 'num_format': num_format, 'valign': 'vcenter', 'align': 'center', 'bold': True, 'font_size': 12, 'font_color': '#000000'})  # No Data/Zero
+        green_format = workbook.add_format({'bg_color': '#C6EFCE', 'border': 1, 'num_format': num_format, 'valign': 'vcenter', 'align': 'center', 'bold': True, 'font_size': 10, 'font_name': font_name, 'font_color': '#000000'})
+        red_format = workbook.add_format({'bg_color': '#FFC7CE', 'border': 1, 'num_format': num_format, 'valign': 'vcenter', 'align': 'center', 'bold': True, 'font_size': 10, 'font_name': font_name, 'font_color': '#000000'})
+        grey_format = workbook.add_format({'bg_color': '#F2F2F2', 'border': 1, 'num_format': num_format, 'valign': 'vcenter', 'align': 'center', 'bold': True, 'font_size': 10, 'font_name': font_name, 'font_color': '#000000'})
+        yellow_format = workbook.add_format({'bg_color': '#FFF2CC', 'border': 1, 'num_format': num_format, 'valign': 'vcenter', 'align': 'center', 'bold': True, 'font_size': 10, 'font_name': font_name, 'font_color': '#000000'})
         
         # 1. Подготовка данных
         # Определяем столбцы расхода для каждого узла
@@ -1051,18 +1092,21 @@ def create_dashboard_sheet(writer, df, rules_file, allowed_columns):
         num_days = len(unique_dates)
         
         # 2. Заголовки
-        worksheet.write(0, 0, "Узел / (Доп. диапазон)", header_format)
-        worksheet.set_column(0, 0, 30) # Ширина первого столбца
+        worksheet.write(0, 0, "Узел (позиция)", header_format)
+        worksheet.set_column(0, 0, 18) # Ширина первого столбца
+        
+        worksheet.write(0, 1, "Допустимый диапазон", header_format)
+        worksheet.set_column(1, 1, 35) # Ширина второго столбца
         
         # Новый столбец статистики с динамическим заголовком
-        worksheet.write(0, 1, f"Выход за диапазон\nза период {num_days} суток", header_format)
-        worksheet.set_column(1, 1, 18)
+        worksheet.write(0, 2, f"Выход за диапазон\nза период {num_days} суток", header_format)
+        worksheet.set_column(2, 2, 22)
         
-        worksheet.freeze_panes(2, 2)   # Закрепить заголовки (2 строки) и первые два столбца
+        worksheet.freeze_panes(2, 3)   # Закрепить заголовки (2 строки) и первые три столбца
         
         for j, date in enumerate(unique_dates):
-            worksheet.write(0, j + 2, date.strftime('%d.%m.%Y'), header_format)
-            worksheet.set_column(j + 2, j + 2, 20) # Ширина столбцов с датами (увеличил для (тыс. м3))
+            worksheet.write(0, j + 3, date.strftime('%d.%m.%Y'), header_format)
+            worksheet.set_column(j + 3, j + 3, 22) # Ширина столбцов с датами
             
         # 3. Заполнение матрицы
         # Словарь {date: [start_row, end_row]} (0-based indices in DF)
@@ -1083,17 +1127,19 @@ def create_dashboard_sheet(writer, df, rules_file, allowed_columns):
         daily_sums = {date: 0.0 for date in unique_dates}
         
         # Оформление строки Итого (строка 1)
-        worksheet.write(1, 0, "Итого", header_format)
+        worksheet.write(1, 0, "", empty_corner_format)
+        worksheet.write(1, 1, "Итого:", itogo_label_format)
         
-        # Формат для итогов с единицами измерения
+        # Формат для итогов с единицами измерения (белый фон)
         total_data_format = workbook.add_format({
             'bold': True,
             'align': 'center',
             'valign': 'vcenter',
-            'bg_color': '#D9D9D9',
+            'bg_color': '#FFFFFF', # Белый фон
             'border': 1,
+            'font_name': font_name,
             'font_size': 12,
-            'num_format': '# ##0 " (тыс. м3)"'
+            'num_format': '# ##0" (тыс. м3)"'
         })
         
         for i, node in enumerate(unique_nodes):
@@ -1105,15 +1151,17 @@ def create_dashboard_sheet(writer, df, rules_file, allowed_columns):
             qmax = config['qmax']
             units = config['units']
             
-            # Формируем подпись с диапазоном
+            # Формируем раздельные подписи
             qmin_str = f"{qmin:g}"
             if qmax == float('inf'):
                 qmax_str = "∞"
             else:
                 qmax_str = f"{qmax:g}"
             
-            node_label = f"{node}\n({qmin_str} ... {qmax_str} {units})"
-            worksheet.write(row_idx, 0, node_label, node_format)
+            range_label = f"({qmin_str} ... {qmax_str} {units})"
+            
+            worksheet.write(row_idx, 0, node, node_format)
+            worksheet.write(row_idx, 1, range_label, node_format)
             
             col_name = config['col']
             col_idx_in_data = config['col_idx'] # 0-based column index in Data sheet
@@ -1125,7 +1173,7 @@ def create_dashboard_sheet(writer, df, rules_file, allowed_columns):
             total_violation_hours = 0
             
             for j, date in enumerate(unique_dates):
-                col_idx = j + 2 # Смещаем на 2 столбца (Узел, Статистика)
+                col_idx = j + 3 # Смещаем на 3 столбца (Узел, Диапазон, Статистика)
                 
                 if date in date_ranges:
                     start_row, end_row = date_ranges[date]
@@ -1135,10 +1183,15 @@ def create_dashboard_sheet(writer, df, rules_file, allowed_columns):
                     excel_start = start_row + 2
                     excel_end = end_row + 2
                     
+                    # Избегаем ошибок с дублирующимися колонками, используя .item() или явно [0] если get_loc вернул массив (хоть мы их и удалили)
+                    loc = config['col_idx']
+                    idx = int(loc[0]) if isinstance(loc, (list, pd.core.arrays.boolean.BooleanArray)) or hasattr(loc, '__iter__') else int(loc)
+                    col_letter = get_column_letter(idx + 1)
+                    
                     data_range = f"'Данные'!{col_letter}{excel_start}:{col_letter}{excel_end}"
                     
                     # Анализ данных для определния цвета фона (статус) и суммы
-                    values = df.iloc[start_row:end_row+1, config['col_idx']]
+                    values = df.iloc[start_row:end_row+1, idx]
                     vals = pd.to_numeric(values, errors='coerce').fillna(0)
                     
                     day_sum = vals.sum()
@@ -1170,7 +1223,12 @@ def create_dashboard_sheet(writer, df, rules_file, allowed_columns):
                         if day_violation_hours > 0:
                             has_violation = True
                             
-                        if has_violation:
+                        # Присвоение цвета
+                        if day_sum <= 12:
+                            status_format = yellow_format
+                            if has_violation:
+                                total_violation_days += 1
+                        elif has_violation:
                             status_format = red_format
                             total_violation_days += 1
                         else:
@@ -1188,6 +1246,8 @@ def create_dashboard_sheet(writer, df, rules_file, allowed_columns):
                              spark_color = '#A54040' # Еще более бледный темно-красный
                         elif status_format == green_format:
                              spark_color = '#407040' # Еще более бледный темно-зеленый
+                        elif status_format == yellow_format:
+                             spark_color = '#B38600' # Темно-желтый для графика
                              
                         options = {
                             'range': data_range,
@@ -1207,32 +1267,32 @@ def create_dashboard_sheet(writer, df, rules_file, allowed_columns):
             total_days_sum += total_violation_days
             total_hours_sum += total_violation_hours
             
-            # Записываем статистику в столбец 1
+            # Записываем статистику в столбец 2 (индекс 2)
             stats_text = f"{total_violation_days} сут.; {int(total_violation_hours)} ч."
             stats_fmt = green_format
             if total_violation_hours > 0:
                 stats_fmt = red_format
             
-            worksheet.write(row_idx, 1, stats_text, stats_fmt)
+            worksheet.write(row_idx, 2, stats_text, stats_fmt)
             
         # Записываем итоги в строку 1
         # Итог по статистике
         total_stats_text = f"{total_days_sum} сут.; {int(total_hours_sum)} ч."
-        # Используем специальный формат для выделения красным
         total_stats_fmt = workbook.add_format({
             'bold': True,
-            'align': 'center',
             'valign': 'vcenter',
-            'bg_color': '#D9D9D9',
+            'align': 'center',
             'border': 1,
-            'font_size': 12,
-            'font_color': '#FF0000' # Красный шрифт
+            'bg_color': '#FFFFFF',
+            'font_name': font_name,
+            'font_size': 14,
+            'font_color': '#FF0000'
         })
-        worksheet.write(1, 1, total_stats_text, total_stats_fmt)
+        worksheet.write(1, 2, total_stats_text, total_stats_fmt)
         
         # Итоги по датам
         for j, date in enumerate(unique_dates):
-            col_idx = j + 2
+            col_idx = j + 3
             val = daily_sums.get(date, 0)
             worksheet.write_number(1, col_idx, val, total_data_format)
             
@@ -1253,7 +1313,7 @@ def setup_logging():
     
     logging.basicConfig(
         filename=log_file,
-        level=logging.ERROR,
+        level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     return log_file
