@@ -9,6 +9,7 @@ setup(
         'openpyxl>=3.0.0',
         'xlrd>=2.0.0',
         'numpy>=1.18.0',
+        'xlsxwriter>=3.0.0',
     ],
     entry_points={
         'console_scripts': [
@@ -21,6 +22,6 @@ setup(
         'analytics_ui': ['*.xlsx', '*.png'],
     },
     include_package_data=True,
-    author="User",
+    author="Н.А. Галаков",
     description="Tool for merging and analyzing Excel files",
 )
