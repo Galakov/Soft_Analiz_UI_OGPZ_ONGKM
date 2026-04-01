@@ -55,6 +55,9 @@ def format_data_workbook(writer, sheet_name, df, rules_file):
             'align': 'center', 
             'valign': 'vcenter'
         })
+
+        # Убрать сетку
+        worksheet.hide_gridlines(2)
         
         # 1. Подготовка данных для заголовков
         # Читаем правила
@@ -97,48 +100,73 @@ def format_data_workbook(writer, sheet_name, df, rules_file):
         # 2. Запись заголовков (Строки 1 и 2 в Excel -> 0 и 1 индексы)
         headers = df.columns.tolist()
         
-        # Группировка для объединения (Строка 0)
-        # Ищем последовательные столбцы с одинаковым параметром для range_str
-        current_param_range = None
-        merge_start_col = 0
+        # 2. Запись заголовков (Строки 1, 2, 3 в Excel -> 0, 1, 2 индексы)
+        headers = df.columns.tolist()
         
         # Замораживаем панели
-        worksheet.freeze_panes(2, 1) # 2 строки заголовка, 1 столбец слева
+        worksheet.freeze_panes(3, 1) # 3 строки заголовка, 1 столбец слева
         
-        for i, header in enumerate(headers):
-            # Запись заголовка столбца (Строка 1)
-            worksheet.write(1, i, header, header_format)
-            
-            # Логика объединения для строки 0
+        # Заголовок Время (объединяем 3 строки)
+        worksheet.merge_range(0, 0, 2, 0, "Время", header_format)
+        
+        # Группировка для объединения
+        current_node = None
+        current_range = None
+        merge_start_col = 1 # Данные начинаются со 2-го столбца (индекс 1)
+        
+        for i in range(1, len(headers)):
+            header = headers[i]
             base_header = header.split(' ⚠')[0] if ' ⚠' in header else header
-            param_range_str = param_ranges.get(base_header)
+            node = column_to_node.get(base_header, "")
+            param_range_str = param_ranges.get(base_header, "")
             
-            if i == 0:
-                current_param_range = param_range_str
-                merge_start_col = 0
+            # Запись заголовка столбца (Строка 2)
+            worksheet.write(2, i, header, header_format)
+            
+            if i == 1:
+                current_node = node
+                current_range = param_range_str
+                merge_start_col = 1
             else:
-                if param_range_str != current_param_range:
-                    # Записываем предыдущую группу
-                    if current_param_range:
+                # Если узел или диапазон изменились, завершаем предыдущую группу
+                if node != current_node or param_range_str != current_range:
+                    # Объединяем предыдущую группу в Строке 0 (Узел)
+                    if current_node:
                         if i - 1 > merge_start_col:
-                            worksheet.merge_range(0, merge_start_col, 0, i - 1, current_param_range, header_format)
+                            worksheet.merge_range(0, merge_start_col, 0, i - 1, current_node, header_format)
                         else:
-                            worksheet.write(0, merge_start_col, current_param_range, header_format)
-                    # Начинаем новую
-                    current_param_range = param_range_str
+                            worksheet.write(0, merge_start_col, current_node, header_format)
+                    
+                    # Объединяем предыдущую группу в Строке 1 (Диапазон)
+                    if current_range:
+                        if i - 1 > merge_start_col:
+                            worksheet.merge_range(1, merge_start_col, 1, i - 1, current_range, header_format)
+                        else:
+                            worksheet.write(1, merge_start_col, current_range, header_format)
+                    
+                    # Начинаем новую группу
+                    current_node = node
+                    current_range = param_range_str
                     merge_start_col = i
                 
         # Записываем последнюю группу
-        if current_param_range:
-             if len(headers) - 1 > merge_start_col:
-                worksheet.merge_range(0, merge_start_col, 0, len(headers) - 1, current_param_range, header_format)
-             else:
-                worksheet.write(0, merge_start_col, current_param_range, header_format)
+        if len(headers) > 1:
+            last_col = len(headers) - 1
+            if current_node:
+                if last_col > merge_start_col:
+                    worksheet.merge_range(0, merge_start_col, 0, last_col, current_node, header_format)
+                else:
+                    worksheet.write(0, merge_start_col, current_node, header_format)
+            
+            if current_range:
+                if last_col > merge_start_col:
+                    worksheet.merge_range(1, merge_start_col, 1, last_col, current_range, header_format)
+                else:
+                    worksheet.write(1, merge_start_col, current_range, header_format)
 
         # 3. Настройка ширины столбцов и границ
         # Границы групп узлов
-        current_node = None
-        node_start_col = 0
+        current_node_border = None
         
         thick_border_fmt = workbook.add_format({'left': 2}) # Thick left border
         
@@ -151,34 +179,86 @@ def format_data_workbook(writer, sheet_name, df, rules_file):
             # Примерная ширина по данным (первые 50 строк)
             for val in df.iloc[:50, i].astype(str):
                 max_len = max(max_len, len(val))
-            worksheet.set_column(i, i, min(max_len + 2, 50))
+            worksheet.set_column(i, i, min(max_len + 2, 50), center_format)
             
-            # Условное форматирование (Color Scale) для данных
+            # Условное форматирование для данных
             if header != 'Время' and not header.endswith('⚠'):
-                # Определяем диапазон данных (с 3-й строки Excel, индекс 2)
-                # end_row = len(df) + 2 - 1
-                # range_str = f"{get_column_letter(i+1)}3:{get_column_letter(i+1)}{len(df)+2}"
-                # xlsxwriter conditional format
-                worksheet.conditional_format(2, i, len(df)+1, i, {
-                    'type': '3_color_scale',
-                    'min_color': '#FF0000', # Red
-                    'mid_color': '#FFFF00', # Yellow
-                    'max_color': '#92D050'  # Green
-                })
+                # Ищем min/max для этого столбца для расцветки
+                col_rules = rules_df[rules_df.iloc[:, 2] == base_header]
+                qmin = None
+                qmax = None
+                if not col_rules.empty:
+                    try:
+                        qmin_val = col_rules.iloc[0, 5]
+                        qmax_val = col_rules.iloc[0, 6]
+                        if pd.notna(qmin_val): qmin = float(qmin_val)
+                        if pd.notna(qmax_val): qmax = float(qmax_val)
+                    except:
+                        pass
+
+                # Если диапазон задан, применяем сложную логику
+                if qmin is not None and qmax is not None:
+                    # 1. Равен 0 -> нет цвета (белый)
+                    worksheet.conditional_format(3, i, len(df)+2, i, {
+                        'type':     'cell',
+                        'criteria': '==',
+                        'value':    0,
+                        'format':   workbook.add_format({'bg_color': '#FFFFFF', 'align': 'center', 'valign': 'vcenter'})
+                    })
+                    
+                    # 2. Меньше qmin (и не 0) -> Красный
+                    # Используем формулу для исключения 0
+                    col_letter = get_column_letter(i + 1)
+                    worksheet.conditional_format(3, i, len(df)+2, i, {
+                        'type':     'formula',
+                        'criteria': f'=AND({col_letter}4<{qmin}, {col_letter}4<>0)',
+                        'format':   workbook.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'align': 'center', 'valign': 'vcenter'})
+                    })
+                    
+                    # 3. Больше qmax -> Красный
+                    worksheet.conditional_format(3, i, len(df)+2, i, {
+                        'type':     'cell',
+                        'criteria': '>',
+                        'value':    qmax,
+                        'format':   workbook.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'align': 'center', 'valign': 'vcenter'})
+                    })
+                    
+                    # 4. В диапазоне [qmin, qmax] -> Градиент Желтый-Зеленый
+                    worksheet.conditional_format(3, i, len(df)+2, i, {
+                        'type':     '2_color_scale',
+                        'min_color': '#FFFF00', # Yellow
+                        'max_color': '#92D050', # Green
+                        'min_type':  'num',
+                        'min_value': qmin,
+                        'max_type':  'num',
+                        'max_value': qmax
+                    })
+                else:
+                    # Fallback к обычному градиенту, но исключая нули
+                    worksheet.conditional_format(3, i, len(df)+2, i, {
+                        'type':     'cell',
+                        'criteria': '==',
+                        'value':    0,
+                        'format':   workbook.add_format({'bg_color': '#FFFFFF', 'align': 'center', 'valign': 'vcenter'})
+                    })
+                    
+                    worksheet.conditional_format(3, i, len(df)+2, i, {
+                        'type': '3_color_scale',
+                        'min_color': '#FF0000', # Red
+                        'mid_color': '#FFFF00', # Yellow
+                        'max_color': '#92D050'  # Green
+                    })
 
             # Границы узлов (визуально отделяем группы)
             if node:
-                if node != current_node:
+                if node != current_node_border:
                     if i > 0: # Не для первого столбца
-                        # Применяем левую границу ко всему столбцу (через cond format hack или просто set_column?)
-                        # set_column перетрет ширину.
-                        # cond format hack: Always True
-                        worksheet.conditional_format(0, i, len(df)+1, i, {
+                        worksheet.conditional_format(0, i, len(df)+2, i, {
                             'type': 'formula',
                             'criteria': '=TRUE',
                             'format': thick_border_fmt
                         })
-                    current_node = node
+                    current_node_border = node
                     
     except Exception as e:
         print(f"Ошибка при форматировании данных: {e}")
@@ -948,8 +1028,8 @@ class ExcelMerger:
 
                     # Используем xlsxwriter для поддержки спарклайнов
                     with pd.ExcelWriter(output_file, engine='xlsxwriter', datetime_format='yyyy-mm-dd hh:mm:ss') as writer:
-                        # Сохраняем основные данные, начиная со 2 строки (индекс 2), чтобы оставить место для заголовков
-                        merged_df.to_excel(writer, sheet_name='Данные', index=False, startrow=2, header=False)
+                        # Сохраняем основные данные, начиная с 4 строки (индекс 3), чтобы оставить место для заголовков
+                        merged_df.to_excel(writer, sheet_name='Данные', index=False, startrow=3, header=False)
                         
                         # Форматируем лист Данные
                         print("Форматируем лист Данные...")
